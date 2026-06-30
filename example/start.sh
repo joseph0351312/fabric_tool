@@ -1,0 +1,177 @@
+#!/bin/bash
+
+function printhelp(){
+	printf "Example:\n"
+	printf "\t./start.sh up\n"
+	printf "\t./start.sh restart\n"
+	printf "\t./start.sh set_channel\n"
+	printf "\t./start.sh set_chaincode\n"
+	printf "\t./start.sh deploy chaincode_name chaincode_file chaincode_label chaincode_version chaincode_sequence \n"	
+	printf "\t./start.sh deploy chaincode_name chaincode_file chaincode_label chaincode_version chaincode_sequence chaincode_package_id\n"	
+}
+function docker_up(){
+	docker network create fabric-center
+	docker compose -f ./docker/docker-compose-order.yaml -f ./docker/docker-compose-org0.yaml -f ./docker/docker-compose-cli.yaml  up -d 
+	docker ps -a | grep orderer
+	docker ps -a | grep peer
+	docker ps -a | grep couch
+	docker ps -a | grep cli
+	
+	./uint/ssh_docker.sh clc1 192.168.0.11 org1 up -d
+	./uint/ssh_docker.sh clc2 192.168.0.12 org2 up -d
+	./uint/ssh_docker.sh clc3 192.168.0.13 org3 up -d
+	./uint/ssh_docker.sh clc4 192.168.0.14 org4 up -d
+}
+function restartAllDocker() {
+	
+   docker-compose -f ./docker/docker-compose-order.yaml  -f ./docker/docker-compose-org1.yaml -f ./docker/docker-compose-org2.yaml  -f ./docker/docker-compose-org3.yaml -f ./docker/docker-compose-org4.yaml restart
+  DOCKER_IMAGE_IDS=$(docker images | awk '($1 ~ /dev-peer.*/) {print $3}')
+  if [ -z "$DOCKER_IMAGE_IDS" -o "$DOCKER_IMAGE_IDS" == " " ]; then
+    infoln "No images available for deletion"
+  else
+    docker restart -f $DOCKER_IMAGE_IDS
+  fi
+  docker ps -a | grep orderer
+  docker ps -a | grep peer
+  docker ps -a | grep couch
+  docker ps -a | grep cli
+}
+
+function setchannel(){
+
+	docker exec -it cli0 peer channel create -o orderer0.com:7050 -c channel -f ./channel-artifacts/channel.tx --tls true --cafile /opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/ordererOrganizations/com/msp/tlscacerts/tlsca.com-cert.pem
+
+
+
+
+
+	printf "\n\nipchannel.block upmidstreamchannel.block middownstreamchannel.block\n\n"
+        docker cp cli0:/opt/gopath/src/github.com/hyperledger/fabric/peer/channel.block ./
+        docker cp ./channel.block  cli1:/opt/gopath/src/github.com/hyperledger/fabric/peer/
+	docker cp ./channel.block  cli2:/opt/gopath/src/github.com/hyperledger/fabric/peer/
+        docker cp ./channel.block  cli3:/opt/gopath/src/github.com/hyperledger/fabric/peer/
+	docker cp ./channel.block  cli4:/opt/gopath/src/github.com/hyperledger/fabric/peer/
+	
+	printf "\nchannel join...\n"
+
+	docker exec -it cli0  peer channel join -b ./channel.block 
+	docker exec -it cli1  peer channel join -b ./channel.block 
+	docker exec -it cli2  peer channel join -b ./channel.block 
+	docker exec -it cli3  peer channel join -b ./channel.block 
+	docker exec -it cli4  peer channel join -b ./channel.block 
+
+
+
+	printf "\nnormal channel was join!!\n"
+
+
+	docker exec -it cli0 peer channel update -o orderer0.com:7050 -c channel -f ./channel-artifacts/Org0MSPanchors.tx  --tls --cafile /opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/ordererOrganizations/com/orderers/orderer0.com/msp/tlscacerts/tlsca.com-cert.pem
+
+	docker exec -it cli1 peer channel update -o orderer0.com:7050 -c channel -f ./channel-artifacts/Org1MSPanchors.tx  --tls --cafile /opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/ordererOrganizations/com/orderers/orderer0.com/msp/tlscacerts/tlsca.com-cert.pem
+
+	docker exec -it cli2 peer channel update -o orderer0.com:7050 -c channel -f ./channel-artifacts/Org2MSPanchors.tx  --tls --cafile /opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/ordererOrganizations/com/orderers/orderer0.com/msp/tlscacerts/tlsca.com-cert.pem
+
+	docker exec -it cli3 peer channel update -o orderer0.com:7050 -c channel -f ./channel-artifacts/Org3MSPanchors.tx  --tls --cafile /opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/ordererOrganizations/com/orderers/orderer0.com/msp/tlscacerts/tlsca.com-cert.pem
+
+	
+	docker exec -it cli4 peer channel update -o orderer0.com:7050 -c channel -f ./channel-artifacts/Org4MSPanchors.tx  --tls --cafile /opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/ordererOrganizations/com/orderers/orderer0.com/msp/tlscacerts/tlsca.com-cert.pem
+ 	printf "\nnornmalchannel  update successful\n"
+
+}
+function set_chaincode(){
+	#package_id=contract_1:11e3f4d9e287eb26b11f7cd0e95d55791f1d018e4aaff6f6ada5d68e5fd25b2f
+	./uint/set_chaincode.sh cli0 $package_id channel $contract  $chaincode_version $chaincode_sequence
+	./uint/set_chaincode.sh cli1 $package_id channel $contract  $chaincode_version $chaincode_sequence
+	./uint/set_chaincode.sh cli2 $package_id channel $contract  $chaincode_version $chaincode_sequence
+	./uint/set_chaincode.sh cli3 $package_id channel $contract  $chaincode_version $chaincode_sequence
+	./uint/set_chaincode.sh cli4 $package_id channel $contract  $chaincode_version $chaincode_sequence
+
+
+}
+function chaincode_commit_invoke(){
+	./uint/chaincode_seting_all.sh  channel $contract  $chaincode_version  $chaincode_sequence
+
+}
+
+function yuan(){
+	contract=yuan
+	contract_file=yuan
+	contract_1=yuan_1
+	package_id=yuan_1:6847a7074968eed82db87aa16c3f7e117cf5f5361a7639f21c3723644d504527
+	chaincode_version=1.0	
+	chaincode_sequence=1
+}
+function contract(){
+	contract=contract
+	contract_file=contract
+	contract_1=contract_1
+	package_id=contract_1:7fd42b012ce52b48b298d77f0855a4cd057891ba90afbba902afbaf877ee1c63
+	chaincode_version=1.0	
+	chaincode_sequence=1
+}
+
+function restartUnwantedImages() {
+  DOCKER_IMAGE_IDS=$(docker images | awk '($1 ~ /dev-peer.*/) {print $3}')
+  if [ -z "$DOCKER_IMAGE_IDS" -o "$DOCKER_IMAGE_IDS" == " " ]; then
+    infoln "No images available for deletion"
+  else
+    docker restart -f $DOCKER_IMAGE_IDS
+  fi
+}
+function setup(){
+
+	if [ "$set_data" = "up" ]
+	then
+		docker_up
+		restartUnwantedImages
+	elif [ "$set_data" = "restart"  ]
+	then
+		restartAllDocker
+	elif [ "$set_data" = "set_channel" ]
+	then
+		docker_up
+		sleep 5
+		setchannel
+	elif [ "$set_data" = "set_chaincode" ]
+	then
+	        docker_up
+		sleep 5
+                setchannel
+
+		yuan
+		./uint/deploy.sh $contract $contract_file $contract_1
+                set_chaincode
+		chaincode_commit_invoke
+
+
+		rm -rf *.block
+	elif [ "$set_data" = "deploy"  ]
+	then
+		
+		
+		./uint/deploy.sh $contract $contract_file $contract_1
+                set_chaincode
+                chaincode_commit_invoke
+                rm -rf *.block
+
+	else
+		printhelp
+	fi
+
+}
+
+if [ $# -eq 1 ] || [ $# -eq 6  ] || [ $# -eq 7 ] ;then
+	set_data=$1
+	contract=$2
+	contract_file=$3
+	contract_1=$4
+	chaincode_version=$5
+	chaincode_sequence=$6
+	package_id=$7
+	setup
+	
+else
+
+	printhelp
+fi	
+

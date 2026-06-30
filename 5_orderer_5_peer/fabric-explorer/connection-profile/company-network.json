@@ -1,0 +1,48 @@
+{
+	"name": "company.com",
+	"version": "1.0.0",
+	"client": {
+		"tlsEnable": true,
+		"adminCredential": {
+			"id": "exploreradmin",
+			"password": "exploreradminpw"
+		},
+		"enableAuthentication": true,
+		"organization": "COMSP",
+		"connection": {
+			"timeout": {
+				"peer": {
+					"endorser": "300"
+				},
+				"orderer": "300"
+			}
+		}
+	},
+	"channels": {
+		"schchannel": {
+			"peers": {
+				"peer0.company.com": {}
+			}
+		}
+	},
+	"organizations": {
+		"COMSP": {
+			"mspid": "COMSP",
+			"adminPrivateKey": {
+				"path": "/tmp/crypto/peerOrganizations/company.com/users/Admin@company.com/msp/keystore/priv_sk"
+			},
+			"peers": ["peer0.company.com"],
+			"signedCert": {
+				"path": "/tmp/crypto/peerOrganizations/company.com/users/Admin@company.com/msp/signcerts/Admin@company.com-cert.pem"
+			}
+		}
+	},
+	"peers": {
+		"peer0.company.com": {
+			"tlsCACerts": {
+				"path": "/tmp/crypto/peerOrganizations/company.com/peers/peer0.company.com/tls/ca.crt"
+			},
+			"url": "grpcs://peer0.company.com:9051"
+		}
+	}
+}

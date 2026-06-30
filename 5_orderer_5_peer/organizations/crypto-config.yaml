@@ -1,0 +1,57 @@
+OrdererOrgs:
+  - Name: Orderer
+    Domain: com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: orderer0
+      - Hostname: orderer1
+      - Hostname: orderer2
+      - Hostname: orderer3
+      - Hostname: orderer4
+      - Hostname: ca
+        
+PeerOrgs:
+  - Name: Org0
+    Domain: org0.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: peer0
+      - Hostname: ca
+    Users:
+      Count: 1
+  - Name: Org1
+    Domain: org1.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: peer0
+      - Hostname: ca
+    Users:
+      Count: 1
+
+  - Name: Org2
+    Domain: org2.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: peer0
+      - Hostname: ca
+    Users:
+      Count: 1
+
+  - Name: Org3
+    Domain: org3.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: peer0
+      - Hostname: ca
+    Users:
+      Count: 1
+
+  - Name: Org4
+    Domain: org4.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: peer0
+      - Hostname: ca
+    Users:
+      Count: 1
+
