@@ -389,34 +389,87 @@ run_on() {
 # 複製文件到目標機器 (支援遞迴)
 copy_to() {
   local src="$1" host="$2" dest="$3"
+  local dest_dir dest_file
+
   debug "copy_to: src=$src host=$host dest=$dest"
 
+  # 驗證源文件/目錄
   if [ ! -e "$src" ]; then
     warn "源文件/目錄不存在: $src (跳過)"
     return 0
   fi
 
+  # 本機複製
   if is_local "$host"; then
-    mkdir -p "$(dirname "$dest")"
+    mkdir -p "$(dirname "$dest")" 2>/dev/null || true
+
     if [ -d "$src" ]; then
-      cp -r "$src" "$dest" 2>/dev/null || true
+      # 遞迴複製目錄
+      cp -r "$src" "$dest" 2>/dev/null || {
+        warn "  無法複製目錄 (本機): $src"
+        return 1
+      }
     else
-      cp "$src" "$dest" 2>/dev/null || true
+      # 複製單個文件
+      cp "$src" "$dest" 2>/dev/null || {
+        warn "  無法複製文件 (本機): $src"
+        return 1
+      }
     fi
+
     debug "✓ 已複製 (本機): $src → $dest"
-  else
-    if [ -d "$src" ]; then
-      scp -r "$src" "${host}:${dest}" 2>/dev/null || {
-        warn "無法複製目錄: $src → $host:$dest"
-        return 1
-      }
+    return 0
+  fi
+
+  # 遠端複製 (使用 SCP)
+  local scp_opts="-r -C -p"  # 遞迴, 壓縮, 保留時間戳
+
+  # 先在遠端建立目標目錄
+  local dest_parent=$(dirname "$dest")
+  debug "在遠端建立目錄: ssh $host mkdir -p $dest_parent"
+
+  if ! ssh "$host" "mkdir -p '$dest_parent'" 2>/dev/null; then
+    warn "  無法在遠端建立目錄: $host:$dest_parent"
+    return 1
+  fi
+
+  # 執行 SCP 傳送
+  debug "開始 SCP 傳送: scp $scp_opts $src $host:$dest"
+
+  if [ -d "$src" ]; then
+    # 對於目錄，使用 scp -r
+    if scp $scp_opts "$src" "${host}:${dest}" 2>/tmp/scp_error_$$.log; then
+      debug "✓ 已複製目錄 (遠端): $src → $host:$dest"
+      rm -f "/tmp/scp_error_$$.log"
+      return 0
     else
-      scp "$src" "${host}:${dest}" 2>/dev/null || {
-        warn "無法複製文件: $src → $host:$dest"
-        return 1
-      }
+      local scp_error=$(cat "/tmp/scp_error_$$.log" 2>/dev/null)
+      warn "  無法複製目錄到遠端:"
+      warn "  源: $src"
+      warn "  目標: $host:$dest"
+      if [ -n "$scp_error" ]; then
+        warn "  錯誤: $scp_error"
+      fi
+      rm -f "/tmp/scp_error_$$.log"
+      return 1
     fi
-    debug "✓ 已複製 (遠端): $src → $host:$dest"
+  else
+    # 對於文件
+    if scp $scp_opts "$src" "${host}:${dest}" 2>/tmp/scp_error_$$.log; then
+      debug "✓ 已複製文件 (遠端): $src → $host:$dest"
+      rm -f "/tmp/scp_error_$$.log"
+      return 0
+    else
+      local scp_error=$(cat "/tmp/scp_error_$$.log" 2>/dev/null)
+      warn "  無法複製文件到遠端:"
+      warn "  源: $src"
+      warn "  目標: $host:$dest"
+      if [ -n "$scp_error" ]; then
+        warn "  錯誤: $scp_error"
+      fi
+      rm -f "/tmp/scp_error_$$.log"
+      return 1
+    fi
   fi
 }
 
@@ -559,19 +612,55 @@ deploy_common_files() {
   local ssh_target=$1
   local remote_dir=$2
   local label=$3
+  local retry=0
+  local max_retries=3
 
-  # 建立遠端目錄結構
   debug "為 $label 建立目錄結構"
-  run_on "$ssh_target" "mkdir -p ${remote_dir}/{docker,channel-artifacts,organizations,chaincode/go}"
 
-  # 傳送加密材料
-  info "  [$label] 傳送加密材料..."
-  copy_to "${GENERATED_DIR}/organizations/crypto-config" "$ssh_target" "${remote_dir}/organizations/crypto-config"
+  # 建立遠端目錄結構 (使用 -p 確保父目錄存在)
+  # 注意：shell 的 {...} 展開可能在遠端失敗，改用順序建立
+  while [ $retry -lt $max_retries ]; do
+    if run_on "$ssh_target" "mkdir -p '${remote_dir}' && mkdir -p '${remote_dir}/docker' '${remote_dir}/channel-artifacts' '${remote_dir}/organizations' '${remote_dir}/chaincode/go'"; then
+      debug "目錄結構建立成功"
+      break
+    else
+      retry=$((retry + 1))
+      if [ $retry -lt $max_retries ]; then
+        warn "  目錄建立失敗，重試 ($retry/$max_retries)..."
+        sleep 2
+      fi
+    fi
+  done
+
+  if [ $retry -eq $max_retries ]; then
+    error "無法在 $label 建立目錄結構"
+    return 1
+  fi
+
+  # 驗證本機生成文件存在
+  if [ ! -d "${GENERATED_DIR}/organizations/crypto-config" ]; then
+    warn "  加密材料不存在: ${GENERATED_DIR}/organizations/crypto-config (跳過)"
+  else
+    # 傳送加密材料
+    info "  [$label] 傳送加密材料..."
+    if ! copy_to "${GENERATED_DIR}/organizations/crypto-config" "$ssh_target" "${remote_dir}/organizations/crypto-config"; then
+      warn "  加密材料傳送失敗，但繼續..."
+    fi
+  fi
 
   # 傳送通道配置
-  info "  [$label] 傳送通道配置..."
-  copy_to "${GENERATED_DIR}/channel-artifacts" "$ssh_target" "${remote_dir}/channel-artifacts"
-  copy_to "${GENERATED_DIR}/configtx.yaml" "$ssh_target" "${remote_dir}/configtx.yaml"
+  if [ -d "${GENERATED_DIR}/channel-artifacts" ]; then
+    info "  [$label] 傳送通道配置..."
+    if ! copy_to "${GENERATED_DIR}/channel-artifacts" "$ssh_target" "${remote_dir}/channel-artifacts"; then
+      warn "  通道配置傳送失敗，但繼續..."
+    fi
+  fi
+
+  if [ -f "${GENERATED_DIR}/configtx.yaml" ]; then
+    copy_to "${GENERATED_DIR}/configtx.yaml" "$ssh_target" "${remote_dir}/configtx.yaml" || true
+  fi
+
+  debug "公共文件部署完成 [$label]"
 }
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
