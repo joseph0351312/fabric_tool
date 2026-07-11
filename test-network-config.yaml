@@ -1,0 +1,153 @@
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  Hyperledger Fabric 網路配置文件                               ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# 此文件定義整個 Fabric 網路的拓撲結構，包含：
+#   1. 組織定義 (organizations)
+#   2. Channel 與成員配置 (channels)
+#   3. Orderer 節點部署資訊 (orderers)
+#   4. Peer 節點部署資訊 (peers)
+#
+# ─── 使用方式 ─────────────────────────────────────────────────
+#
+#   # 生成網路配置 (讀取配置文件，自動產出到 ~/N_orderer_M_peer/)
+#   ./fabric-tool.sh generate -C network-config.yaml
+#
+#   # 多機部署 + 自動啟動
+#   ./fabric-tool.sh deploy -f network-config.yaml -s
+#
+# ─── 撰寫規則 ─────────────────────────────────────────────────
+#
+#   - YAML 格式，使用空格縮排 (不可用 Tab)
+#   - 頂層 key: organizations, channels, orderers, peers
+#   - 組織名稱: 只能用小寫字母和數字 (例: hospital, org1)
+#   - Channel 名稱: 小寫字母開頭，可含數字、點、連字號
+#   - 路徑 (dir): 節點在目標機器上的部署目錄，
+#     生成的 docker-compose volume 會使用此路徑
+#
+# ─── 命名對應 ─────────────────────────────────────────────────
+#
+#   組織名稱 "hospital" 會生成:
+#     域名:       peer0.hospital.com
+#     MSP ID:     HospitalMSP (首字母大寫)
+#     CA:         ca-hospital
+#     CouchDB:    couchdb0.hospital.com
+#     CLI:        cli0 (按定義順序編號)
+#     Compose:    docker-compose-hospital.yaml
+#
+#   Orderer 按編號生成:
+#     域名:       orderer0.com, orderer1.com, ...
+#     Port:       7050, 8050, 9050, ... (每個 +1000)
+#
+# ══════════════════════════════════════════════════════════════
+
+# ─── 1. 組織定義 ─────────────────────────────────────────────
+#
+# 列出所有參與網路的組織名稱。
+# 順序決定了 CLI 容器編號 (第一個=cli0, 第二個=cli1, ...)
+# 以及 Port 分配 (第一個 Peer=7051, 第二個=8051, ...)
+#
+# 格式:
+#   organizations:
+#     - <org_name>
+#     - <org_name>
+
+organizations:
+  - org1
+  - org2
+  - org3
+  - org4
+
+# ─── 2. Channel 配置 ─────────────────────────────────────────
+#
+# 定義 channel 及其成員組織。
+# 每個 channel 下列出要加入的組織名稱 (必須在上方 organizations 中定義)。
+# 一個組織可以同時加入多個 channel。
+#
+# 格式:
+#   channels:
+#     <channel_name>:
+#       - <org_name>
+#       - <org_name>
+#     <channel_name>:
+#       - <org_name>
+#
+# 生成效果:
+#   - configtx.yaml 中為每個 channel 建立獨立的 Profile
+#   - start.sh 的 setchannel() 會依序建立每個 channel，
+#     只讓指定的組織加入並更新錨節點
+
+channels:
+  mychannel:
+    - org1
+    - org2
+    - org3
+    - org4
+
+
+
+# ─── 3. Orderer 節點 ─────────────────────────────────────────
+#
+# 定義 Orderer 節點的部署位置。
+# 數量由此處的列表決定 (不需要另外指定 -o 參數)。
+# 建議使用奇數個 (1, 3, 5) 以符合 Raft 共識。
+#
+# 格式:
+#   orderers:
+#     - host: <user@ip>       # SSH 登入目標 (需已設定無密碼登入)
+#
+#   host 特殊值:
+#     local                   # 表示本機，不走 SSH，直接本地操作
+#
+# 部署目錄自動決定:
+#   本機:   ~/N_orderer_M_peer/  (N=orderer數量, M=peer數量)
+#   遠端:   /home/<user>/N_orderer_M_peer/
+#
+# Port 分配 (自動，按順序):
+#   orderer0 -> 7050, 7053(admin), 7440(metrics)
+#   orderer1 -> 8050, 8053, 8440
+#   orderer2 -> 9050, 9053, 9440
+
+orderers:
+  - host: clc@192.168.1.10
+  - host: clc1@192.168.1.11
+  - host: clc2@192.168.1.12
+
+
+# ─── 4. Peer 節點 ────────────────────────────────────────────
+#
+# 定義每個組織的 Peer 節點部署位置。
+# key 必須對應上方 organizations 中定義的名稱。
+#
+# 格式:
+#   peers:
+#     <org_name>:
+#       host: <user@ip>       # SSH 登入目標
+#
+#   host 特殊值:
+#     local                   # 表示本機，不走 SSH，直接本地操作
+#
+# 部署目錄自動決定:
+#   本機:   ~/N_orderer_M_peer/
+#   遠端:   /home/<user>/N_orderer_M_peer/
+#
+# 每個 org 會部署:
+#   - 1 個 Peer (peer0.<org>.com)
+#   - 1 個 CA (ca-<org>)
+#   - 1 個 CouchDB (couchdb0.<org>.com)
+#   - 1 個 CLI (cli<N>)
+#
+# Port 分配 (按 organizations 順序):
+#   第 1 個 org -> Peer:7051, CA:7054, CouchDB:5984
+#   第 2 個 org -> Peer:8051, CA:8054, CouchDB:6984
+#   第 3 個 org -> Peer:9051, CA:9054, CouchDB:7984
+
+peers:
+  org1:
+    host: clc@192.168.1.10
+  org2:
+    host: clc1@192.168.1.11
+  org3:
+    host: clc2@192.168.1.12
+  org4:
+    host: clc3@192.168.1.13
