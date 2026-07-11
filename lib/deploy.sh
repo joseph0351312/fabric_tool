@@ -404,7 +404,8 @@ copy_to() {
     mkdir -p "$(dirname "$dest")" 2>/dev/null || true
 
     if [ -d "$src" ]; then
-      # 遞迴複製目錄
+      # 若目標目錄已存在，先移除避免 cp -r 產生嵌套 (dest/src-name/...)
+      rm -rf "$dest"
       cp -r "$src" "$dest" 2>/dev/null || {
         warn "  無法複製目錄 (本機): $src"
         return 1
@@ -424,11 +425,17 @@ copy_to() {
   # 遠端複製 (使用 SCP)
   local scp_opts="-r -C -p"  # 遞迴, 壓縮, 保留時間戳
 
-  # 先在遠端建立目標目錄
+  # 只建立父目錄；若目標目錄已存在先移除，
+  # 否則 scp -r 會把來源目錄放入既有目錄內，形成 dest/src-name/ 的錯誤嵌套
   local dest_parent=$(dirname "$dest")
-  debug "在遠端建立目錄: ssh $host mkdir -p $dest_parent"
+  debug "準備遠端目錄: ssh $host mkdir -p $dest_parent"
 
-  if ! ssh "$host" "mkdir -p '$dest_parent'" 2>/dev/null; then
+  if [ -d "$src" ]; then
+    if ! ssh "$host" "rm -rf '$dest' && mkdir -p '$dest_parent'" 2>/dev/null; then
+      warn "  無法準備遠端目錄: $host:$dest_parent"
+      return 1
+    fi
+  elif ! ssh "$host" "mkdir -p '$dest_parent'" 2>/dev/null; then
     warn "  無法在遠端建立目錄: $host:$dest_parent"
     return 1
   fi

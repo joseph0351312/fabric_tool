@@ -78,6 +78,12 @@ step() {
   echo -e "${CYAN}→${NC} ${BOLD}$*${NC}"
 }
 
+# 除錯輸出 (DEBUG=1 時啟用)
+debug() {
+  [ "${DEBUG:-0}" = "1" ] && echo -e "${DIM}[DEBUG]${NC} $*" >&2
+  return 0
+}
+
 # 打印使用說明
 print_usage() {
   cat << 'EOF'
@@ -181,12 +187,14 @@ check_requirements() {
     info "Docker: $(docker --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
   fi
 
-  # 檢查 Docker Compose
-  if ! command -v docker-compose &> /dev/null; then
+  # 檢查 Docker Compose (v2 插件或 v1 獨立命令皆可)
+  if docker compose version &> /dev/null; then
+    info "Docker Compose: $(docker compose version --short 2>/dev/null || echo v2)"
+  elif command -v docker-compose &> /dev/null; then
+    info "Docker Compose: $(docker-compose --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
+  else
     error "未安裝 Docker Compose。請先安裝: https://docs.docker.com/compose/install/"
     ((missing++))
-  else
-    info "Docker Compose: $(docker-compose --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
   fi
 
   # 檢查 Fabric 工具
@@ -221,7 +229,7 @@ print_version() {
     echo -e "  ${RED}✗${NC} Docker 未安裝"
   fi
 
-  if command -v docker-compose &> /dev/null; then
+  if docker compose version &> /dev/null || command -v docker-compose &> /dev/null; then
     echo -e "  ${GREEN}✓${NC} Docker Compose 已安裝"
   else
     echo -e "  ${RED}✗${NC} Docker Compose 未安裝"
@@ -2235,46 +2243,7 @@ CLEANUP=false
 TEST_SSH=false
 FABRIC_BIN_PATH=""
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 顏色定義
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly CYAN='\033[0;36m'
-readonly BOLD='\033[1m'
-readonly DIM='\033[2m'
-readonly NC='\033[0m'
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 輸出函數
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-error() {
-  echo -e "${RED}✗${NC} $*" >&2
-}
-
-warn() {
-  echo -e "${YELLOW}⚠${NC} $*" >&2
-}
-
-success() {
-  echo -e "${GREEN}✓${NC} $*"
-}
-
-info() {
-  echo -e "${BLUE}ℹ${NC} $*"
-}
-
-step() {
-  echo -e "${CYAN}→${NC} ${BOLD}$*${NC}"
-}
-
-debug() {
-  [ "$DEBUG" = "1" ] && echo -e "${DIM}[DEBUG]${NC} $*"
-}
+# 顏色與輸出函數沿用腳本頂部的全域定義 (勿在此重複宣告 readonly，會在 set -e 下中斷)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 參數解析
@@ -2596,7 +2565,7 @@ run_on() {
 # 複製文件到目標機器 (支援遞迴)
 copy_to() {
   local src="$1" host="$2" dest="$3"
-  local dest_dir dest_file
+  local dest_parent
 
   debug "copy_to: src=$src host=$host dest=$dest"
 
@@ -2606,18 +2575,20 @@ copy_to() {
     return 0
   fi
 
+  dest_parent=$(dirname "$dest")
+
   # 本機複製
   if is_local "$host"; then
-    mkdir -p "$(dirname "$dest")" 2>/dev/null || true
+    mkdir -p "$dest_parent" 2>/dev/null || true
 
     if [ -d "$src" ]; then
-      # 遞迴複製目錄
+      # 若目標目錄已存在，先移除避免 cp -r 產生嵌套 (dest/src-name/...)
+      rm -rf "$dest"
       cp -r "$src" "$dest" 2>/dev/null || {
         warn "  無法複製目錄 (本機): $src"
         return 1
       }
     else
-      # 複製單個文件
       cp "$src" "$dest" 2>/dev/null || {
         warn "  無法複製文件 (本機): $src"
         return 1
@@ -2628,55 +2599,38 @@ copy_to() {
     return 0
   fi
 
-  # 遠端複製 (使用 SCP)
-  local scp_opts="-r -C -p"  # 遞迴, 壓縮, 保留時間戳
-
-  # 先在遠端建立目標目錄
-  local dest_parent=$(dirname "$dest")
-  debug "在遠端建立目錄: ssh $host mkdir -p $dest_parent"
-
-  if ! ssh "$host" "mkdir -p '$dest_parent'" 2>/dev/null; then
-    warn "  無法在遠端建立目錄: $host:$dest_parent"
-    return 1
-  fi
-
-  # 執行 SCP 傳送
-  debug "開始 SCP 傳送: scp $scp_opts $src $host:$dest"
+  # ─── 遠端複製 (使用 SCP) ───
+  # 只建立父目錄，且若目標目錄已存在先移除，
+  # 否則 scp -r 會把來源目錄放入既有目錄內，形成 dest/src-name/ 的錯誤嵌套
+  debug "準備遠端目錄: ssh $host mkdir -p $dest_parent"
 
   if [ -d "$src" ]; then
-    # 對於目錄，使用 scp -r
-    if scp $scp_opts "$src" "${host}:${dest}" 2>/tmp/scp_error_$$.log; then
-      debug "✓ 已複製目錄 (遠端): $src → $host:$dest"
-      rm -f "/tmp/scp_error_$$.log"
-      return 0
-    else
-      local scp_error=$(cat "/tmp/scp_error_$$.log" 2>/dev/null)
-      warn "  無法複製目錄到遠端:"
-      warn "  源: $src"
-      warn "  目標: $host:$dest"
-      if [ -n "$scp_error" ]; then
-        warn "  錯誤: $scp_error"
-      fi
-      rm -f "/tmp/scp_error_$$.log"
+    if ! ssh "$host" "rm -rf '$dest' && mkdir -p '$dest_parent'" 2>/dev/null; then
+      warn "  無法準備遠端目錄: $host:$dest_parent"
       return 1
     fi
   else
-    # 對於文件
-    if scp $scp_opts "$src" "${host}:${dest}" 2>/tmp/scp_error_$$.log; then
-      debug "✓ 已複製文件 (遠端): $src → $host:$dest"
-      rm -f "/tmp/scp_error_$$.log"
-      return 0
-    else
-      local scp_error=$(cat "/tmp/scp_error_$$.log" 2>/dev/null)
-      warn "  無法複製文件到遠端:"
-      warn "  源: $src"
-      warn "  目標: $host:$dest"
-      if [ -n "$scp_error" ]; then
-        warn "  錯誤: $scp_error"
-      fi
-      rm -f "/tmp/scp_error_$$.log"
+    if ! ssh "$host" "mkdir -p '$dest_parent'" 2>/dev/null; then
+      warn "  無法在遠端建立目錄: $host:$dest_parent"
       return 1
     fi
+  fi
+
+  # 執行 SCP 傳送 (-r 遞迴, -C 壓縮, -p 保留時間戳)
+  debug "開始 SCP 傳送: scp -r -C -p $src $host:$dest"
+
+  if scp -r -C -p "$src" "${host}:${dest}" 2>/tmp/scp_error_$$.log; then
+    debug "✓ 已複製 (遠端): $src → $host:$dest"
+    rm -f "/tmp/scp_error_$$.log"
+    return 0
+  else
+    local scp_error=$(cat "/tmp/scp_error_$$.log" 2>/dev/null)
+    warn "  無法複製到遠端:"
+    warn "  源: $src"
+    warn "  目標: $host:$dest"
+    [ -n "$scp_error" ] && warn "  錯誤: $scp_error"
+    rm -f "/tmp/scp_error_$$.log"
+    return 1
   fi
 }
 
